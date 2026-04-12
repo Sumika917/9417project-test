@@ -91,7 +91,11 @@ def _download_uci_dataset(spec: DatasetSpec) -> pd.DataFrame:
     frame.to_csv(raw_dir / "uci_snapshot.csv", index=False)
     write_json(
         raw_dir / "uci_metadata.json",
-        {"metadata": as_serializable(dict(dataset.metadata)), "variables": as_serializable(dataset.variables.to_dict())},
+        {
+            "metadata": as_serializable(dict(dataset.metadata)),
+            "variables": as_serializable(dataset.variables.to_dict()),
+            "source_url": spec.source_url,
+        },
     )
     return frame
 
@@ -119,6 +123,7 @@ def download_dataset(
         manual_hint = dataset_dir / "README_MANUAL_PLACEMENT.txt"
         manual_hint.write_text(
             "Automatic Kaggle download was unavailable.\n"
+            f"Source URL: {spec.source_url}\n"
             f"Place the raw dataset files for {spec.source_id} into this directory and rerun the command.\n",
             encoding="utf-8",
         )
@@ -230,6 +235,7 @@ def prepare_dataset(dataset_name: str, force: bool = False) -> PreparedDataset:
         "task_type": spec.task_type,
         "source_type": spec.source_type,
         "source_id": spec.source_id,
+        "source_url": spec.source_url,
         "target_column": target_column,
         "group_column": group_column,
         "feature_columns": feature_columns,
