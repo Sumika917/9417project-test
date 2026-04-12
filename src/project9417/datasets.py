@@ -35,6 +35,18 @@ def get_processed_dataset_paths(dataset_name: str) -> tuple[Path, Path]:
     return base_dir / "data.csv", base_dir / "metadata.json"
 
 
+def has_downloaded_raw_data(spec: DatasetSpec) -> bool:
+    dataset_dir = get_raw_dataset_dir(spec.name)
+    if not dataset_dir.exists():
+        return False
+    if spec.source_type == "uci":
+        return (dataset_dir / "uci_snapshot.csv").exists()
+    return any(
+        path.is_file() and path.suffix.lower() in {".csv", ".parquet", ".pq", ".xlsx", ".xls"}
+        for path in dataset_dir.rglob("*")
+    )
+
+
 def _ensure_kaggle_download(spec: DatasetSpec) -> None:
     dataset_dir = get_raw_dataset_dir(spec.name)
     dataset_dir.mkdir(parents=True, exist_ok=True)
@@ -84,11 +96,17 @@ def _download_uci_dataset(spec: DatasetSpec) -> pd.DataFrame:
     return frame
 
 
-def download_dataset(dataset_name: str, allow_manual_fallback: bool = True) -> Path:
+def download_dataset(
+    dataset_name: str,
+    allow_manual_fallback: bool = True,
+    force_download: bool = False,
+) -> Path:
     ensure_project_dirs()
     spec = DATASET_REGISTRY[dataset_name]
     dataset_dir = get_raw_dataset_dir(dataset_name)
     dataset_dir.mkdir(parents=True, exist_ok=True)
+    if not force_download and has_downloaded_raw_data(spec):
+        return dataset_dir
     if spec.source_type == "uci":
         _download_uci_dataset(spec)
         return dataset_dir

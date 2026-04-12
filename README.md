@@ -58,3 +58,4 @@ pytest
 ```
 
 If Kaggle API credentials are unavailable, place the Kaggle dataset files into the printed `data/raw/<dataset>/` directory and rerun the relevant command.
+If you need to refresh a dataset that already exists locally, add `--force-download` to the download command.
