@@ -26,6 +26,9 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
+The project installs `openpyxl` for the Excel-based `appendicitis` dataset and `cupy-cuda12x` so `XGBoost` can prefer GPU-backed prediction.
+On Windows, the project also creates a local CUDA shim under the workspace and redirects CuPy cache/temp files into project-local directories so GPU prediction does not depend on restricted system temp locations.
+
 Optional: activate the environment first.
 
 ```powershell
@@ -59,3 +62,4 @@ pytest
 
 If Kaggle API credentials are unavailable, place the Kaggle dataset files into the printed `data/raw/<dataset>/` directory and rerun the relevant command.
 If you need to refresh a dataset that already exists locally, add `--force-download` to the download command.
+`XGBoost` now prefers GPU prediction when CUDA and CuPy are available; on Windows the runtime is configured automatically to use project-local cache/temp directories and a PyTorch-backed CUDA DLL shim. If GPU array conversion still fails, the pipeline automatically falls back to the CPU-input path and records the backend in the run artifacts.

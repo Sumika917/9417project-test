@@ -22,6 +22,7 @@ class InterpretabilityOutputs:
     correlation_table: pd.DataFrame
     global_agop: pd.Series
     leaf_importances: pd.DataFrame
+    agop_source: str
 
 
 def _agop_to_diagonal(agop: Any) -> np.ndarray:
@@ -58,8 +59,21 @@ def _route_leaf_counts(tree: dict[str, Any], X: np.ndarray) -> list[int]:
     return counts
 
 
-def _weighted_global_agop(estimator: Any, X_train: np.ndarray, feature_names: list[str]) -> tuple[pd.Series, pd.DataFrame]:
-    agops = estimator.collect_best_agops()
+def _collect_leaf_importance_matrices(estimator: Any) -> tuple[list[Any], str]:
+    try:
+        return estimator.collect_best_agops(), "agop_best_model"
+    except AttributeError:
+        if hasattr(estimator, "collect_Ms"):
+            return estimator.collect_Ms(), "M_fallback"
+        raise
+
+
+def _weighted_global_agop(
+    estimator: Any,
+    X_train: np.ndarray,
+    feature_names: list[str],
+) -> tuple[pd.Series, pd.DataFrame, str]:
+    agops, agop_source = _collect_leaf_importance_matrices(estimator)
     leaf_rows: list[dict[str, Any]] = []
     weighted_sum = np.zeros(len(feature_names), dtype=float)
     total_weight = 0.0
@@ -77,7 +91,7 @@ def _weighted_global_agop(estimator: Any, X_train: np.ndarray, feature_names: li
                 row[feature_names[feature_idx]] = float(diag[feature_idx])
             leaf_rows.append(row)
     global_diag = weighted_sum / max(total_weight, 1.0)
-    return pd.Series(global_diag, index=feature_names, name="agop_weighted"), pd.DataFrame(leaf_rows)
+    return pd.Series(global_diag, index=feature_names, name="agop_weighted"), pd.DataFrame(leaf_rows), agop_source
 
 
 def _permutation_importance_scores(
@@ -102,13 +116,20 @@ def _permutation_importance_scores(
 def run_appendicitis_interpretability(seed: int = 42, device: str = "auto", top_k: int = 15) -> InterpretabilityOutputs:
     experiment = prepare_experiment("appendicitis", seed=seed, force_rebuild_splits=False)
     bundle = preprocess_for_model(experiment, "xrfm")
-    result = fit_and_select_model("xrfm", experiment.prepared_dataset.spec, bundle, device=device, seed=seed)
+    result = fit_and_select_model(
+        "xrfm",
+        experiment.prepared_dataset.spec,
+        bundle,
+        device=device,
+        seed=seed,
+        collect_xrfm_agops=True,
+    )
 
     X_train = bundle.X_train
     y_train = bundle.y_train
     feature_names = bundle.feature_names
 
-    global_agop, leaf_importances = _weighted_global_agop(result.estimator, X_train, feature_names)
+    global_agop, leaf_importances, agop_source = _weighted_global_agop(result.estimator, X_train, feature_names)
     pca = PCA(n_components=1, random_state=seed)
     pca.fit(X_train)
     pca_scores = pd.Series(np.abs(pca.components_[0]), index=feature_names, name="pca_loading")
@@ -161,6 +182,7 @@ def run_appendicitis_interpretability(seed: int = 42, device: str = "auto", top_
         {
             "seed": seed,
             "top_features": top_features,
+            "agop_source": agop_source,
             "validation_metrics": as_serializable(result.validation_metrics),
             "test_metrics": as_serializable(result.test_metrics),
             "artifacts": {
@@ -175,4 +197,5 @@ def run_appendicitis_interpretability(seed: int = 42, device: str = "auto", top_
         correlation_table=correlation_table,
         global_agop=global_agop,
         leaf_importances=leaf_importances,
+        agop_source=agop_source,
     )

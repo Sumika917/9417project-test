@@ -59,6 +59,11 @@ def _ensure_2d(y: pd.Series | pd.DataFrame) -> np.ndarray:
     return values
 
 
+def _prepare_categorical_frame(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    categorical = frame[columns].copy().astype("object")
+    return categorical.where(pd.notna(categorical), np.nan)
+
+
 def preprocess_splits(
     train_df: pd.DataFrame,
     val_df: pd.DataFrame,
@@ -96,9 +101,9 @@ def preprocess_splits(
     if cat_cols:
         cat_imputer = SimpleImputer(strategy="most_frequent")
         cat_encoder = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
-        train_cat = cat_imputer.fit_transform(X_train_df[cat_cols].astype("string"))
-        val_cat = cat_imputer.transform(X_val_df[cat_cols].astype("string"))
-        test_cat = cat_imputer.transform(X_test_df[cat_cols].astype("string"))
+        train_cat = cat_imputer.fit_transform(_prepare_categorical_frame(X_train_df, cat_cols))
+        val_cat = cat_imputer.transform(_prepare_categorical_frame(X_val_df, cat_cols))
+        test_cat = cat_imputer.transform(_prepare_categorical_frame(X_test_df, cat_cols))
         X_cat_train = cat_encoder.fit_transform(train_cat)
         X_cat_val = cat_encoder.transform(val_cat)
         X_cat_test = cat_encoder.transform(test_cat)

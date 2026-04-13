@@ -2,14 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import product
+import os
 from time import perf_counter
 from typing import Any
 
 import numpy as np
 
+from .gpu_runtime import configure_cupy_runtime
 from .metrics import classification_metrics, is_higher_better, regression_metrics
 from .preprocessing import PreprocessedData
 from .registry import DatasetSpec
+from .xrfm_compat import ensure_xrfm_runtime_patch
 
 
 @dataclass
@@ -25,6 +28,10 @@ class ModelRunResult:
     total_runtime_sec: float
     y_pred_test: np.ndarray
     y_proba_test: np.ndarray | None
+    prediction_backend: str
+
+
+_XGBOOST_PREDICTION_WARNINGS: set[str] = set()
 
 
 def resolve_device(device: str) -> str:
@@ -65,7 +72,7 @@ def _evaluate_predictions(
     return regression_metrics(y_true.astype(float), y_pred.astype(float))
 
 
-def _xrfm_param_grid(task_type: str) -> list[dict[str, Any]]:
+def _xrfm_param_grid(task_type: str, collect_leaf_agops: bool = False) -> list[dict[str, Any]]:
     configs: list[dict[str, Any]] = []
     for iters, reg in product([3, 5], [1e-3, 5e-3]):
         configs.append(
@@ -85,6 +92,7 @@ def _xrfm_param_grid(task_type: str) -> list[dict[str, Any]]:
                         "iters": iters,
                         "verbose": False,
                         "early_stop_rfm": True,
+                        "get_agop_best_model": collect_leaf_agops,
                         "return_best_params": True,
                     },
                 },
@@ -112,13 +120,15 @@ def _xgboost_param_grid(task_type: str) -> list[dict[str, Any]]:
 
 def _rf_param_grid(task_type: str) -> list[dict[str, Any]]:
     configs: list[dict[str, Any]] = []
+    # Windows sandboxed environments can deny the pipes joblib uses when n_jobs != 1.
+    rf_n_jobs = 1 if os.name == "nt" else -1
     for max_depth, min_samples_leaf in product([None, 20], [1, 4]):
         payload = {
             "n_estimators": 300,
             "max_depth": max_depth,
             "min_samples_leaf": min_samples_leaf,
             "random_state": 42,
-            "n_jobs": -1,
+            "n_jobs": rf_n_jobs,
         }
         if task_type == "classification":
             payload["class_weight"] = None
@@ -126,9 +136,9 @@ def _rf_param_grid(task_type: str) -> list[dict[str, Any]]:
     return configs
 
 
-def _get_param_grid(model_name: str, task_type: str) -> list[dict[str, Any]]:
+def _get_param_grid(model_name: str, task_type: str, collect_leaf_agops: bool = False) -> list[dict[str, Any]]:
     if model_name == "xrfm":
-        return _xrfm_param_grid(task_type)
+        return _xrfm_param_grid(task_type, collect_leaf_agops=collect_leaf_agops)
     if model_name == "xgboost":
         return _xgboost_param_grid(task_type)
     if model_name == "random_forest":
@@ -146,6 +156,7 @@ def _build_estimator(
 ) -> Any:
     if model_name == "xrfm":
         try:
+            ensure_xrfm_runtime_patch()
             from xrfm import xRFM
         except ImportError as exc:
             raise RuntimeError("xrfm is not installed.") from exc
@@ -204,7 +215,11 @@ def _fit_estimator(estimator: Any, model_name: str, bundle: PreprocessedData) ->
     estimator.fit(bundle.X_train, bundle.y_train)
 
 
-def _predict_with_optional_proba(estimator: Any, X: np.ndarray, task_type: str) -> tuple[np.ndarray, np.ndarray | None]:
+def _predict_with_optional_proba_cpu(
+    estimator: Any,
+    X: np.ndarray,
+    task_type: str,
+) -> tuple[np.ndarray, np.ndarray | None]:
     y_pred = _flatten_predictions(estimator.predict(X))
     y_proba = None
     if task_type == "classification" and hasattr(estimator, "predict_proba"):
@@ -213,6 +228,50 @@ def _predict_with_optional_proba(estimator: Any, X: np.ndarray, task_type: str) 
         except Exception:
             y_proba = None
     return y_pred, y_proba
+
+
+def _warn_xgboost_prediction_fallback_once(reason: str) -> None:
+    if reason in _XGBOOST_PREDICTION_WARNINGS:
+        return
+    _XGBOOST_PREDICTION_WARNINGS.add(reason)
+    print(f"[xgboost] GPU prediction fallback to CPU path: {reason}")
+
+
+def _predict_xgboost_with_optional_proba(
+    estimator: Any,
+    X: np.ndarray,
+    task_type: str,
+    device: str,
+) -> tuple[np.ndarray, np.ndarray | None, str]:
+    if device == "cuda":
+        try:
+            configure_cupy_runtime()
+            import cupy as cp
+
+            X_gpu = cp.asarray(X)
+            y_pred = _flatten_predictions(np.asarray(estimator.predict(X_gpu)))
+            y_proba = None
+            if task_type == "classification" and hasattr(estimator, "predict_proba"):
+                y_proba = _ensure_proba_shape(np.asarray(estimator.predict_proba(X_gpu)))
+            return y_pred, y_proba, "gpu_inplace"
+        except Exception as exc:
+            _warn_xgboost_prediction_fallback_once(repr(exc))
+
+    y_pred, y_proba = _predict_with_optional_proba_cpu(estimator, X, task_type)
+    return y_pred, y_proba, "cpu_fallback"
+
+
+def _predict_with_optional_proba(
+    estimator: Any,
+    X: np.ndarray,
+    task_type: str,
+    model_name: str,
+    device: str,
+) -> tuple[np.ndarray, np.ndarray | None, str]:
+    if model_name == "xgboost":
+        return _predict_xgboost_with_optional_proba(estimator, X, task_type, device)
+    y_pred, y_proba = _predict_with_optional_proba_cpu(estimator, X, task_type)
+    return y_pred, y_proba, "native"
 
 
 def _select_better(metric_name: str, current: float, incumbent: float | None) -> bool:
@@ -229,9 +288,10 @@ def fit_and_select_model(
     bundle: PreprocessedData,
     device: str = "auto",
     seed: int = 42,
+    collect_xrfm_agops: bool = False,
 ) -> ModelRunResult:
     resolved_device = resolve_device(device)
-    param_grid = _get_param_grid(model_name, spec.task_type)
+    param_grid = _get_param_grid(model_name, spec.task_type, collect_leaf_agops=collect_xrfm_agops)
     best_candidate: dict[str, Any] | None = None
     best_score: float | None = None
     search_start = perf_counter()
@@ -241,7 +301,13 @@ def fit_and_select_model(
         fit_start = perf_counter()
         _fit_estimator(estimator, model_name, bundle)
         fit_time = perf_counter() - fit_start
-        val_pred, val_proba = _predict_with_optional_proba(estimator, bundle.X_val, spec.task_type)
+        val_pred, val_proba, prediction_backend = _predict_with_optional_proba(
+            estimator,
+            bundle.X_val,
+            spec.task_type,
+            model_name,
+            resolved_device,
+        )
         val_metrics = _evaluate_predictions(spec.task_type, bundle.y_val, val_pred, val_proba)
         score = val_metrics[spec.primary_metric]
         if _select_better(spec.primary_metric, score, best_score):
@@ -251,16 +317,19 @@ def fit_and_select_model(
                 "params": params,
                 "validation_metrics": val_metrics,
                 "fit_time_sec": fit_time,
+                "prediction_backend": prediction_backend,
             }
 
     if best_candidate is None:
         raise RuntimeError(f"Model search produced no candidate for {model_name}")
 
     predict_start = perf_counter()
-    y_pred_test, y_proba_test = _predict_with_optional_proba(
+    y_pred_test, y_proba_test, prediction_backend = _predict_with_optional_proba(
         best_candidate["estimator"],
         bundle.X_test,
         spec.task_type,
+        model_name,
+        resolved_device,
     )
     predict_time_total_sec = perf_counter() - predict_start
     test_metrics = _evaluate_predictions(spec.task_type, bundle.y_test, y_pred_test, y_proba_test)
@@ -277,4 +346,5 @@ def fit_and_select_model(
         total_runtime_sec=float(perf_counter() - search_start),
         y_pred_test=y_pred_test,
         y_proba_test=y_proba_test,
+        prediction_backend=prediction_backend,
     )

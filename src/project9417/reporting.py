@@ -25,6 +25,7 @@ def _flatten_metrics(records: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
             "dataset_display_name": record["dataset_display_name"],
             "task_type": record["task_type"],
             "model_name": record["model_name"],
+            "prediction_backend": record.get("prediction_backend", "native"),
             "train_size": record["train_size"],
             "val_size": record["val_size"],
             "test_size": record["test_size"],

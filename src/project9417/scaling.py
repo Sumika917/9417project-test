@@ -20,6 +20,41 @@ class ScalingResult:
     time_plot_path: str
 
 
+def _load_existing_scaling_results(csv_path: str | pd.io.common.FilePath | None) -> pd.DataFrame:
+    if csv_path is None:
+        return pd.DataFrame()
+    path = pd.io.common.stringify_path(csv_path)
+    try:
+        return pd.read_csv(path)
+    except FileNotFoundError:
+        return pd.DataFrame()
+
+
+def _write_scaling_plots(output: pd.DataFrame, dataset_name: str, primary_metric: str, display_name: str) -> tuple[str, str]:
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    metric_plot_path = FIGURES_DIR / f"{dataset_name}_scaling_metric.png"
+    time_plot_path = FIGURES_DIR / f"{dataset_name}_scaling_fit_time.png"
+
+    plt.figure(figsize=(10, 6))
+    sns.lineplot(data=output, x="sample_size", y="primary_metric", hue="model_name", marker="o")
+    plt.xscale("log")
+    plt.ylabel(primary_metric)
+    plt.title(f"{display_name}: Test {primary_metric} vs n")
+    plt.tight_layout()
+    plt.savefig(metric_plot_path, dpi=200)
+    plt.close()
+
+    plt.figure(figsize=(10, 6))
+    sns.lineplot(data=output, x="sample_size", y="fit_time_sec", hue="model_name", marker="o")
+    plt.xscale("log")
+    plt.ylabel("fit_time_sec")
+    plt.title(f"{display_name}: Fit time vs n")
+    plt.tight_layout()
+    plt.savefig(time_plot_path, dpi=200)
+    plt.close()
+    return str(metric_plot_path), str(time_plot_path)
+
+
 def run_scaling_analysis(
     dataset_name: str = "job_salary",
     model_names: list[str] | None = None,
@@ -39,10 +74,22 @@ def run_scaling_analysis(
     test_df = experiment.test_df
     filtered_sizes = list(dict.fromkeys([size for size in sample_sizes if size < len(full_train)] + [len(full_train)]))
 
-    records: list[dict[str, float | int | str]] = []
+    METRICS_DIR.mkdir(parents=True, exist_ok=True)
+    csv_path = METRICS_DIR / "scaling_results.csv"
+    existing = _load_existing_scaling_results(csv_path)
+    if not existing.empty:
+        existing = existing[existing["dataset_name"] == dataset_name].copy()
+    completed = {
+        (str(row.dataset_name), int(row.sample_size), str(row.model_name))
+        for row in existing.itertuples()
+    }
+    records: list[dict[str, float | int | str]] = existing.to_dict(orient="records")
     for sample_size in filtered_sizes:
         sampled_train = full_train.sample(n=sample_size, random_state=seed, replace=False).reset_index(drop=True)
         for model_name in model_names:
+            key = (dataset_name, int(sample_size), model_name)
+            if key in completed:
+                continue
             bundle = preprocess_splits(
                 train_df=sampled_train,
                 val_df=val_df,
@@ -55,43 +102,20 @@ def run_scaling_analysis(
                 model_family=model_name,
             )
             result = fit_and_select_model(model_name, spec, bundle, device=device, seed=seed)
-            records.append(
-                {
-                    "dataset_name": dataset_name,
-                    "model_name": model_name,
-                    "sample_size": sample_size,
-                    "primary_metric": result.test_metrics[spec.primary_metric],
-                    "fit_time_sec": result.fit_time_sec,
-                    "preprocess_time_sec": bundle.preprocess_time_sec,
-                    "total_runtime_sec": bundle.preprocess_time_sec + result.total_runtime_sec,
-                }
-            )
+            record = {
+                "dataset_name": dataset_name,
+                "model_name": model_name,
+                "sample_size": sample_size,
+                "primary_metric": result.test_metrics[spec.primary_metric],
+                "fit_time_sec": result.fit_time_sec,
+                "preprocess_time_sec": bundle.preprocess_time_sec,
+                "total_runtime_sec": bundle.preprocess_time_sec + result.total_runtime_sec,
+            }
+            records.append(record)
+            completed.add(key)
+            pd.DataFrame(records).sort_values(["sample_size", "model_name"]).to_csv(csv_path, index=False)
 
-    output = pd.DataFrame(records)
-    METRICS_DIR.mkdir(parents=True, exist_ok=True)
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    csv_path = METRICS_DIR / "scaling_results.csv"
-    output.to_csv(csv_path, index=False)
+    output = pd.DataFrame(records).sort_values(["sample_size", "model_name"]).reset_index(drop=True)
+    metric_plot_path, time_plot_path = _write_scaling_plots(output, dataset_name, spec.primary_metric, spec.display_name)
 
-    metric_plot_path = FIGURES_DIR / f"{dataset_name}_scaling_metric.png"
-    time_plot_path = FIGURES_DIR / f"{dataset_name}_scaling_fit_time.png"
-
-    plt.figure(figsize=(10, 6))
-    sns.lineplot(data=output, x="sample_size", y="primary_metric", hue="model_name", marker="o")
-    plt.xscale("log")
-    plt.ylabel(spec.primary_metric)
-    plt.title(f"{spec.display_name}: Test {spec.primary_metric} vs n")
-    plt.tight_layout()
-    plt.savefig(metric_plot_path, dpi=200)
-    plt.close()
-
-    plt.figure(figsize=(10, 6))
-    sns.lineplot(data=output, x="sample_size", y="fit_time_sec", hue="model_name", marker="o")
-    plt.xscale("log")
-    plt.ylabel("fit_time_sec")
-    plt.title(f"{spec.display_name}: Fit time vs n")
-    plt.tight_layout()
-    plt.savefig(time_plot_path, dpi=200)
-    plt.close()
-
-    return ScalingResult(output, str(metric_plot_path), str(time_plot_path))
+    return ScalingResult(output, metric_plot_path, time_plot_path)

@@ -100,6 +100,7 @@ def persist_model_artifacts(
         "dataset_display_name": experiment.prepared_dataset.spec.display_name,
         "task_type": experiment.prepared_dataset.spec.task_type,
         "model_name": model_name,
+        "prediction_backend": model_result.prediction_backend,
         "seed": seed,
         "feature_count": len(bundle.feature_names),
         "train_size": len(bundle.y_train),

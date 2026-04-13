@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import urllib.parse
+import urllib.request
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,6 +14,8 @@ import pandas as pd
 from .paths import PROCESSED_DATA_DIR, RAW_DATA_DIR, ensure_project_dirs
 from .registry import DATASET_REGISTRY, DatasetSpec
 from .utils import as_serializable, normalize_name, read_json, read_table, resolve_column_name, write_json
+
+SUPPORTED_TABLE_SUFFIXES = {".csv", ".parquet", ".pq", ".xlsx", ".xls", ".data"}
 
 
 @dataclass
@@ -40,11 +45,9 @@ def has_downloaded_raw_data(spec: DatasetSpec) -> bool:
     if not dataset_dir.exists():
         return False
     if spec.source_type == "uci":
-        return (dataset_dir / "uci_snapshot.csv").exists()
-    return any(
-        path.is_file() and path.suffix.lower() in {".csv", ".parquet", ".pq", ".xlsx", ".xls"}
-        for path in dataset_dir.rglob("*")
-    )
+        if (dataset_dir / "uci_snapshot.csv").exists():
+            return True
+    return any(path.is_file() and path.suffix.lower() in SUPPORTED_TABLE_SUFFIXES for path in dataset_dir.rglob("*"))
 
 
 def _ensure_kaggle_download(spec: DatasetSpec) -> None:
@@ -75,29 +78,86 @@ def _ensure_kaggle_download(spec: DatasetSpec) -> None:
 
 
 def _download_uci_dataset(spec: DatasetSpec) -> pd.DataFrame:
-    try:
-        from ucimlrepo import fetch_ucirepo
-    except ImportError as exc:
-        raise RuntimeError("ucimlrepo is required to download UCI datasets.") from exc
-
-    dataset = fetch_ucirepo(id=int(spec.source_id))
-    features = dataset.data.features.copy()
-    targets = dataset.data.targets.copy()
-    if not isinstance(targets, pd.DataFrame):
-        targets = pd.DataFrame(targets)
-    frame = pd.concat([features.reset_index(drop=True), targets.reset_index(drop=True)], axis=1)
     raw_dir = get_raw_dataset_dir(spec.name)
     raw_dir.mkdir(parents=True, exist_ok=True)
-    frame.to_csv(raw_dir / "uci_snapshot.csv", index=False)
+
+    try:
+        from ucimlrepo import fetch_ucirepo
+    except ImportError:
+        fetch_ucirepo = None
+
+    if fetch_ucirepo is not None:
+        try:
+            dataset = fetch_ucirepo(id=int(spec.source_id))
+            features = dataset.data.features.copy()
+            targets = dataset.data.targets.copy()
+            if not isinstance(targets, pd.DataFrame):
+                targets = pd.DataFrame(targets)
+            frame = pd.concat([features.reset_index(drop=True), targets.reset_index(drop=True)], axis=1)
+            frame.to_csv(raw_dir / "uci_snapshot.csv", index=False)
+            write_json(
+                raw_dir / "uci_metadata.json",
+                {
+                    "metadata": as_serializable(dict(dataset.metadata)),
+                    "variables": as_serializable(dataset.variables.to_dict()),
+                    "source_url": spec.source_url,
+                    "source_download_url": spec.source_download_url,
+                    "download_method": "ucimlrepo",
+                },
+            )
+            return frame
+        except Exception as exc:
+            if not spec.source_download_url:
+                raise RuntimeError(
+                    f"Failed to download UCI dataset {spec.name} via ucimlrepo and no fallback URL is configured."
+                ) from exc
+
+    if not spec.source_download_url:
+        raise RuntimeError(f"No direct download URL configured for UCI dataset {spec.name}.")
+
+    parsed = urllib.parse.urlparse(spec.source_download_url)
+    filename = Path(parsed.path).name or f"{spec.name}_download"
+    download_path = raw_dir / filename
+    urllib.request.urlretrieve(spec.source_download_url, download_path)
+
+    if download_path.suffix.lower() == ".zip":
+        with zipfile.ZipFile(download_path) as archive:
+            archive.extractall(raw_dir)
+    elif download_path.suffix.lower() not in SUPPORTED_TABLE_SUFFIXES:
+        raise RuntimeError(
+            f"Unsupported fallback file type for UCI dataset {spec.name}: {download_path.suffix.lower()}"
+        )
+
+    table_path = _find_candidate_raw_table(raw_dir)
+    frame = _read_uci_fallback_table(spec, table_path)
     write_json(
         raw_dir / "uci_metadata.json",
         {
-            "metadata": as_serializable(dict(dataset.metadata)),
-            "variables": as_serializable(dataset.variables.to_dict()),
             "source_url": spec.source_url,
+            "source_download_url": spec.source_download_url,
+            "download_method": "direct",
+            "table_path": str(table_path),
         },
     )
     return frame
+
+
+def _read_uci_fallback_table(spec: DatasetSpec, table_path: Path) -> pd.DataFrame:
+    if table_path.suffix.lower() != ".data":
+        return read_table(table_path)
+    if spec.name == "iris":
+        return pd.read_csv(
+            table_path,
+            header=None,
+            names=[
+                "sepal length",
+                "sepal width",
+                "petal length",
+                "petal width",
+                "class",
+            ],
+        )
+    return pd.read_csv(table_path)
 
 
 def download_dataset(
@@ -134,7 +194,7 @@ def _find_candidate_raw_table(dataset_dir: Path) -> Path:
     candidates = [
         path
         for path in dataset_dir.rglob("*")
-        if path.is_file() and path.suffix.lower() in {".csv", ".parquet", ".pq", ".xlsx", ".xls"}
+        if path.is_file() and path.suffix.lower() in SUPPORTED_TABLE_SUFFIXES
     ]
     if not candidates:
         raise FileNotFoundError(f"No supported table files found in {dataset_dir}")
@@ -147,6 +207,8 @@ def load_raw_dataset(spec: DatasetSpec) -> pd.DataFrame:
         csv_path = dataset_dir / "uci_snapshot.csv"
         if csv_path.exists():
             return pd.read_csv(csv_path)
+        if has_downloaded_raw_data(spec):
+            return _read_uci_fallback_table(spec, _find_candidate_raw_table(dataset_dir))
         return _download_uci_dataset(spec)
 
     table_path = _find_candidate_raw_table(dataset_dir)

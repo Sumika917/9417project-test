@@ -9,9 +9,11 @@ description = "COMP9417 project pipeline for xRFM, XGBoost, and Random Forest on
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "cupy-cuda12x>=13.0",
     "kaggle>=1.7.4",
     "matplotlib>=3.8",
     "numpy>=1.26",
+    "openpyxl>=3.1",
     "pandas>=2.2",
     "scikit-learn>=1.5",
     "seaborn>=0.13",

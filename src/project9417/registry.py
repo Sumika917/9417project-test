@@ -16,6 +16,7 @@ class DatasetSpec:
     source_type: SourceType
     source_id: str
     source_url: str
+    source_download_url: str | None
     target_column: str
     target_aliases: tuple[str, ...]
     primary_metric: str
@@ -37,6 +38,7 @@ DATASET_REGISTRY: dict[str, DatasetSpec] = {
         source_type="kaggle",
         source_id="nalisha/job-salary-prediction-dataset",
         source_url="https://www.kaggle.com/datasets/nalisha/job-salary-prediction-dataset",
+        source_download_url=None,
         target_column="salary",
         target_aliases=("salary", "Salary", "target", "Salary($)", "estimated_salary"),
         primary_metric="rmse",
@@ -51,6 +53,7 @@ DATASET_REGISTRY: dict[str, DatasetSpec] = {
         source_type="kaggle",
         source_id="grandmaster07/student-exam-performance-dataset-analysis",
         source_url="https://www.kaggle.com/datasets/grandmaster07/student-exam-performance-dataset-analysis",
+        source_download_url=None,
         target_column="Exam_Score",
         target_aliases=("Exam_Score", "exam_score", "overall_score", "Overall_Score"),
         primary_metric="rmse",
@@ -63,6 +66,7 @@ DATASET_REGISTRY: dict[str, DatasetSpec] = {
         source_type="uci",
         source_id="938",
         source_url="https://archive-beta.ics.uci.edu/dataset/938/regensburg+pediatric+appendicitis",
+        source_download_url="https://zenodo.org/records/7669442/files/app_data.xlsx?download=1",
         target_column="Diagnosis",
         target_aliases=("Diagnosis", "diagnosis", "appendicitis", "Appendicitis"),
         primary_metric="accuracy",
@@ -77,6 +81,7 @@ DATASET_REGISTRY: dict[str, DatasetSpec] = {
         source_type="uci",
         source_id="189",
         source_url="https://archive-beta.ics.uci.edu/dataset/189/parkinsons+telemonitoring",
+        source_download_url="https://cdn.uci-ics-mlr-prod.aws.uci.edu/189/parkinsons%2Btelemonitoring.zip",
         target_column="total_UPDRS",
         target_aliases=("total_UPDRS", "Total_UPDRS"),
         primary_metric="rmse",
@@ -91,6 +96,7 @@ DATASET_REGISTRY: dict[str, DatasetSpec] = {
         source_type="uci",
         source_id="53",
         source_url="https://archive-beta.ics.uci.edu/dataset/53/iris",
+        source_download_url="https://cdn.uci-ics-mlr-prod.aws.uci.edu/53/iris.zip",
         target_column="class",
         target_aliases=("class", "Class", "species", "Species"),
         primary_metric="accuracy",
