@@ -63,3 +63,77 @@ pytest
 If Kaggle API credentials are unavailable, place the Kaggle dataset files into the printed `data/raw/<dataset>/` directory and rerun the relevant command.
 If you need to refresh a dataset that already exists locally, add `--force-download` to the download command.
 `XGBoost` now prefers GPU prediction when CUDA and CuPy are available; on Windows the runtime is configured automatically to use project-local cache/temp directories and a PyTorch-backed CUDA DLL shim. If GPU array conversion still fails, the pipeline automatically falls back to the CPU-input path and records the backend in the run artifacts.
+
+## Common Targeted Commands
+
+Run a single dataset through the whole data-prep pipeline:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\download_data.py --dataset appendicitis
+.\.venv\Scripts\python.exe scripts\prepare_data.py --dataset appendicitis
+```
+
+Run one dataset with all three models:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_experiments.py --dataset appendicitis --models xrfm xgboost random_forest --device auto --seed 42
+```
+
+Run one model across all datasets:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_experiments.py --dataset all --models xgboost --device auto --seed 42
+```
+
+Run one model on one dataset only:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_experiments.py --dataset iris --models xgboost --device auto --seed 42
+.\.venv\Scripts\python.exe scripts\run_experiments.py --dataset student_exam --models xrfm --device auto --seed 42
+```
+
+Refresh only the fixed auxiliary experiments:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_interpretability.py --dataset appendicitis --model xrfm --device auto --seed 42
+.\.venv\Scripts\python.exe scripts\run_scaling.py --dataset job_salary --models xrfm xgboost random_forest --device auto --seed 42
+```
+
+Rebuild only the summary tables and figures from existing run records:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\summarize_results.py
+```
+
+If you need to regenerate the persistent split files, add `--force-rebuild-splits` to `run_experiments.py`.
+
+## Key Outputs
+
+Main experiment outputs:
+
+- `data/artifacts/metrics/leaderboard.csv`
+- `data/artifacts/metrics/per_dataset_results.csv`
+- `data/artifacts/metrics/timing_summary.csv`
+- `data/artifacts/metrics/runs/*.json`
+- `data/artifacts/predictions/<dataset>/<model>.csv`
+- `data/artifacts/best_configs/<dataset>_<model>.json`
+
+Interpretability outputs:
+
+- `data/artifacts/interpretability/appendicitis_rankings.csv`
+- `data/artifacts/interpretability/appendicitis_rank_correlations.csv`
+- `data/artifacts/interpretability/appendicitis_leaf_importances.csv`
+- `data/artifacts/interpretability/appendicitis_interpretability_summary.json`
+- `data/artifacts/interpretability/appendicitis_top_features.png`
+- `data/artifacts/interpretability/appendicitis_agop_heatmap.png`
+
+Scaling outputs:
+
+- `data/artifacts/metrics/scaling_results.csv`
+- `data/artifacts/figures/job_salary_scaling_metric.png`
+- `data/artifacts/figures/job_salary_scaling_fit_time.png`
+
+Summary figures:
+
+- `data/artifacts/figures/primary_metric_comparison.png`
+- `data/artifacts/figures/timing_comparison.png`
