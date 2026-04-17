@@ -13,6 +13,14 @@ from .preprocessing import preprocess_splits
 from .registry import DATASET_REGISTRY, DEFAULT_MODELS
 
 
+MODEL_ORDER = ["random_forest", "xgboost", "xrfm"]
+MODEL_PALETTE = {
+    "random_forest": "#4C78A8",
+    "xgboost": "#F58518",
+    "xrfm": "#54A24B",
+}
+
+
 @dataclass
 class ScalingResult:
     dataframe: pd.DataFrame
@@ -34,24 +42,78 @@ def _write_scaling_plots(output: pd.DataFrame, dataset_name: str, primary_metric
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     metric_plot_path = FIGURES_DIR / f"{dataset_name}_scaling_metric.png"
     time_plot_path = FIGURES_DIR / f"{dataset_name}_scaling_fit_time.png"
+    output = output.sort_values(["model_name", "sample_size"]).reset_index(drop=True)
 
-    plt.figure(figsize=(10, 6))
-    sns.lineplot(data=output, x="sample_size", y="primary_metric", hue="model_name", marker="o")
-    plt.xscale("log")
-    plt.ylabel(primary_metric)
-    plt.title(f"{display_name}: Test {primary_metric} vs n")
-    plt.tight_layout()
-    plt.savefig(metric_plot_path, dpi=200)
-    plt.close()
+    fig, axis = plt.subplots(figsize=(10, 6))
+    sns.lineplot(
+        data=output,
+        x="sample_size",
+        y="primary_metric",
+        hue="model_name",
+        hue_order=MODEL_ORDER,
+        palette=MODEL_PALETTE,
+        marker="o",
+        ax=axis,
+    )
+    axis.legend(title="Model")
+    axis.set_xscale("log")
+    axis.set_xlabel("Training sample size")
+    axis.set_ylabel(primary_metric.upper())
+    axis.set_title(f"{display_name}: Test {primary_metric.upper()} vs training size")
+    axis.grid(True, which="both", alpha=0.25)
+    metric_offsets = {
+        "random_forest": (8, 12),
+        "xgboost": (8, 0),
+        "xrfm": (8, -12),
+    }
+    for row in output.sort_values("sample_size").groupby("model_name", sort=False).tail(1).itertuples():
+        dx, dy = metric_offsets.get(row.model_name, (8, 0))
+        axis.annotate(
+            f"{row.model_name}: {row.primary_metric:.0f}",
+            (row.sample_size, row.primary_metric),
+            xytext=(dx, dy),
+            textcoords="offset points",
+            fontsize=9,
+        )
+    fig.tight_layout()
+    fig.savefig(metric_plot_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
 
-    plt.figure(figsize=(10, 6))
-    sns.lineplot(data=output, x="sample_size", y="fit_time_sec", hue="model_name", marker="o")
-    plt.xscale("log")
-    plt.ylabel("fit_time_sec")
-    plt.title(f"{display_name}: Fit time vs n")
-    plt.tight_layout()
-    plt.savefig(time_plot_path, dpi=200)
-    plt.close()
+    fig, axis = plt.subplots(figsize=(10, 6))
+    sns.lineplot(
+        data=output,
+        x="sample_size",
+        y="fit_time_sec",
+        hue="model_name",
+        hue_order=MODEL_ORDER,
+        palette=MODEL_PALETTE,
+        marker="o",
+        ax=axis,
+    )
+    axis.legend(title="Model")
+    axis.set_xscale("log")
+    axis.set_yscale("log")
+    axis.set_xlabel("Training sample size")
+    axis.set_ylabel("Fit time (sec)")
+    axis.set_title(f"{display_name}: Fit Time vs training size")
+    axis.grid(True, which="both", alpha=0.25)
+    time_offsets = {
+        "random_forest": (8, 12),
+        "xgboost": (8, 4),
+        "xrfm": (8, -8),
+    }
+    for row in output.sort_values("sample_size").groupby("model_name", sort=False).tail(1).itertuples():
+        dx, dy = time_offsets.get(row.model_name, (8, 0))
+        axis.annotate(
+            f"{row.model_name}: {row.fit_time_sec:.1f}s",
+            (row.sample_size, row.fit_time_sec),
+            xytext=(dx, dy),
+            textcoords="offset points",
+            fontsize=9,
+        )
+    fig.tight_layout()
+    fig.savefig(time_plot_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
     return str(metric_plot_path), str(time_plot_path)
 
 

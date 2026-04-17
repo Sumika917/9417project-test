@@ -15,6 +15,14 @@ from .models import fit_and_select_model
 from .paths import INTERPRETABILITY_DIR
 from .utils import as_serializable, write_json
 
+METHOD_COLUMNS = ["agop_weighted", "pca_loading", "mutual_info", "permutation_importance"]
+METHOD_LABELS = {
+    "agop_weighted": "Weighted AGOP",
+    "pca_loading": "PCA loading",
+    "mutual_info": "Mutual information",
+    "permutation_importance": "Permutation importance",
+}
+
 
 @dataclass
 class InterpretabilityOutputs:
@@ -155,33 +163,67 @@ def run_appendicitis_interpretability(seed: int = 42, device: str = "auto", top_
     correlation_table.to_csv(correlation_path, index=True)
     leaf_importances.to_csv(leaf_path, index=False)
 
-    top_features = ranking_table.sort_values("agop_weighted", ascending=False).head(top_k).index.tolist()
-    melted = (
-        ranking_table.loc[top_features, ["agop_weighted", "pca_loading", "mutual_info", "permutation_importance"]]
-        .reset_index(names="feature")
-        .melt(id_vars="feature", var_name="method", value_name="score")
-    )
-    plt.figure(figsize=(14, 7))
-    sns.barplot(data=melted, x="feature", y="score", hue="method")
-    plt.xticks(rotation=45, ha="right")
-    plt.tight_layout()
-    plt.savefig(INTERPRETABILITY_DIR / "appendicitis_top_features.png", dpi=200)
-    plt.close()
+    agop_top_features = ranking_table.sort_values("agop_weighted", ascending=False).head(top_k).index.tolist()
+    method_ranks = ranking_table[METHOD_COLUMNS].rank(ascending=False, method="average")
+    rank_denominator = max(len(ranking_table) - 1, 1)
+    rank_percentiles = 1.0 - (method_ranks - 1.0) / rank_denominator
+    average_rank = method_ranks.mean(axis=1).sort_values()
+    consensus_top_features = average_rank.head(top_k).index.tolist()
+    selected_features = list(dict.fromkeys(agop_top_features + consensus_top_features))
+    ordered_features = average_rank.loc[selected_features].sort_values().index.tolist()
 
-    heatmap = leaf_importances[[col for col in top_features if col in leaf_importances.columns]].copy()
-    if not heatmap.empty:
-        heatmap.index = [f"tree{row.tree_idx}_leaf{row.leaf_idx}" for row in leaf_importances.itertuples()]
-        plt.figure(figsize=(10, max(5, len(heatmap) * 0.35)))
-        sns.heatmap(heatmap, annot=True, cmap="mako")
-        plt.tight_layout()
-        plt.savefig(INTERPRETABILITY_DIR / "appendicitis_agop_heatmap.png", dpi=200)
-        plt.close()
+    rank_heatmap = rank_percentiles.loc[ordered_features, METHOD_COLUMNS].rename(columns=METHOD_LABELS)
+    fig, axis = plt.subplots(figsize=(10, max(6, len(rank_heatmap) * 0.42)))
+    sns.heatmap(rank_heatmap, cmap="crest", vmin=0.0, vmax=1.0, linewidths=0.4, cbar_kws={"label": "Rank percentile"}, ax=axis)
+    axis.set_title("Appendicitis: Relative importance ranking agreement")
+    axis.set_xlabel("Method")
+    axis.set_ylabel("Feature")
+    fig.tight_layout()
+    fig.savefig(INTERPRETABILITY_DIR / "appendicitis_top_features.png", dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+    leaf_feature_columns = [col for col in agop_top_features if col in leaf_importances.columns]
+    leaf_plot_df = leaf_importances.sort_values(["leaf_count", "tree_idx", "leaf_idx"], ascending=[False, True, True]).reset_index(drop=True)
+    if len(leaf_plot_df) > 1 and leaf_feature_columns:
+        heatmap = leaf_plot_df[leaf_feature_columns].copy()
+        heatmap.index = [
+            f"tree{row.tree_idx}_leaf{row.leaf_idx} (n={int(row.leaf_count)})"
+            for row in leaf_plot_df.itertuples()
+        ]
+        fig, axis = plt.subplots(figsize=(11, max(5, len(heatmap) * 0.55)))
+        sns.heatmap(
+            heatmap,
+            cmap="mako",
+            linewidths=0.3,
+            cbar_kws={"label": "AGOP diagonal importance"},
+            ax=axis,
+        )
+        axis.set_title("Appendicitis: xRFM leaf-level AGOP heatmap")
+        axis.set_xlabel("Feature")
+        axis.set_ylabel("Leaf")
+        fig.tight_layout()
+        fig.savefig(INTERPRETABILITY_DIR / "appendicitis_agop_heatmap.png", dpi=200, bbox_inches="tight")
+        plt.close(fig)
+    elif leaf_feature_columns:
+        row = leaf_plot_df.iloc[0]
+        profile = (
+            pd.Series({feature: float(row[feature]) for feature in leaf_feature_columns})
+            .sort_values(ascending=True)
+        )
+        fig, axis = plt.subplots(figsize=(10, max(5, len(profile) * 0.4)))
+        axis.barh(profile.index, profile.values, color="#54A24B")
+        axis.set_title(f"Appendicitis: Single-leaf xRFM AGOP profile (n={int(row['leaf_count'])})")
+        axis.set_xlabel("AGOP diagonal importance")
+        axis.set_ylabel("Feature")
+        fig.tight_layout()
+        fig.savefig(INTERPRETABILITY_DIR / "appendicitis_agop_heatmap.png", dpi=200, bbox_inches="tight")
+        plt.close(fig)
 
     write_json(
         INTERPRETABILITY_DIR / "appendicitis_interpretability_summary.json",
         {
             "seed": seed,
-            "top_features": top_features,
+            "top_features": ordered_features,
             "agop_source": agop_source,
             "validation_metrics": as_serializable(result.validation_metrics),
             "test_metrics": as_serializable(result.test_metrics),
