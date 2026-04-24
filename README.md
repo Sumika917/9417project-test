@@ -107,6 +107,14 @@ Rebuild only the summary tables and figures from existing run records:
 
 If you need to regenerate the persistent split files, add `--force-rebuild-splits` to `run_experiments.py`.
 
+Run the standalone bonus experiment:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_bonus_residual_agop.py
+```
+
+The bonus script reuses the project's prepared `parkinsons` dataset and split logic, and fetches the extra `energy_efficiency` dataset through `ucimlrepo` at runtime.
+
 ## Key Outputs
 
 Main experiment outputs:
@@ -137,3 +145,24 @@ Summary figures:
 
 - `data/artifacts/figures/primary_metric_comparison.png`
 - `data/artifacts/figures/timing_comparison.png`
+
+Bonus outputs:
+
+- `data/artifacts/bonus/bonus_summary.csv`
+- `data/artifacts/bonus/bonus_results.json`
+- `data/artifacts/bonus/parkinsons_agop_diagonals.png`
+- `data/artifacts/bonus/energy_efficiency_agop_diagonals.png`
+
+## Bonus Experiment
+
+The repository includes a standalone bonus experiment for residual-weighted AGOP as an extension of the xRFM split direction.
+It compares standard AGOP with a residual-weighted variant that emphasizes samples with larger squared residuals when building the split criterion.
+
+Run it with:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_bonus_residual_agop.py
+```
+
+The script writes its tables and figures into `data/artifacts/bonus/`.
+It reuses the existing `parkinsons` dataset pipeline from the project and downloads the additional `energy_efficiency` UCI dataset on demand via `ucimlrepo`.
